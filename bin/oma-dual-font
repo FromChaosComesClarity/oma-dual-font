@@ -197,15 +197,13 @@ exec $(printf '%q' "$self") replay-terminal
 HOOK
 )
 
-  # Only write when the content differs, so an unchanged hook keeps its mtime.
+  # The only file this plugin writes outside its own directory, and the name is
+  # plugin-specific so it cannot collide with a hook someone else installed.
+  # Only written when the content differs, so an unchanged hook keeps its mtime.
   if [[ ! -f $hook_file ]] || [[ "$(cat "$hook_file")" != "$desired" ]]; then
     printf '%s\n' "$desired" >"$hook_file"
     chmod +x "$hook_file"
   fi
-
-  # An earlier hand-rolled version of this hook did the same job. Two hooks
-  # applying the same pin is harmless but confusing, so retire it.
-  rm -f "$hook_dir/10-terminal-font"
 }
 
 case "${1:-}" in

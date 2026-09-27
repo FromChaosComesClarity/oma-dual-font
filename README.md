@@ -88,6 +88,36 @@ rm -rf ~/.config/omarchy/plugins/io.github.fromchaoscomesclarity.oma-dual-font
 
 Remove the widget from `bar.layout` and you are back to stock.
 
+## What it touches
+
+Worth being explicit, since this writes outside its own directory:
+
+- `~/.config/alacritty/alacritty.toml`, `~/.config/kitty/kitty.conf`,
+  `~/.config/ghostty/config` and `~/.config/foot/foot.ini`, but only the font
+  family line, and only when you pick a terminal font.
+- `~/.config/omarchy/terminal-font`, which is just the family name it remembers.
+- `~/.config/omarchy/hooks/font-set.d/10-oma-dual-font`, installed the first
+  time the widget loads. It is the only file created outside the plugin
+  directory, the name is plugin-specific so it cannot collide with anyone
+  else's hook, and it is rewritten only when its contents would change.
+
+The system font is never written directly. That is handed to `omarchy-font-set`.
+
+Nothing else is modified, and `terminal-clear` plus deleting that hook puts you
+back to stock.
+
+## Dependencies
+
+Everything it needs ships with Omarchy already:
+
+- `fontconfig` (`fc-list`, `fc-match`) for enumerating and resolving families
+- `omarchy-font-set` for the system font
+- `omarchy-pkg-add` and `omarchy-launch-floating-terminal-with-presentation`,
+  used only when you pick one of the fonts Omarchy can install
+- `omarchy-notification-send`, optional, for the restart nudge on ghostty and foot
+
+No network access, no background daemon, and no other runtime.
+
 ## License
 
 GPL-3.0-or-later.

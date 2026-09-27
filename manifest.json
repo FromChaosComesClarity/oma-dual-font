@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.fromchaoscomesclarity.oma-dual-font",
   "name": "Oma Dual Font",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "author": "Jose",
   "license": "GPL-3.0-or-later",
   "description": "One font for the system, a different one for the terminal. Stock Omarchy keeps a single font, so a proportional family on the bar lands in the terminal too. This puts both choices in one bar popup and keeps them independent.",
