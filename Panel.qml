@@ -51,14 +51,33 @@ KeyboardPanel {
     if (hostWidget) hostWidget.refresh()
   }
 
-  function splitLines(text) {
+  // Rows arrive as value<TAB>label<TAB>description. The description is set
+  // only for a font Omarchy can install but has not, so the picker can say so
+  // rather than silently offering something that is not on the disk yet.
+  function parseOptions(text) {
     var out = []
     var lines = String(text || "").split("\n")
     for (var i = 0; i < lines.length; i++) {
-      var line = lines[i].trim()
-      if (line !== "") out.push(line)
+      if (lines[i].trim() === "") continue
+      var parts = lines[i].split("\t")
+      var family = String(parts[0] || "").trim()
+      if (family === "") continue
+      out.push({
+        value: family,
+        label: String(parts[1] || family).trim(),
+        description: String(parts[2] || "").trim()
+      })
     }
     return out
+  }
+
+  // A chosen font that still has to be downloaded opens a floating terminal
+  // for pacman, so get the popup out of the way.
+  function needsInstall(options, family) {
+    for (var i = 0; i < options.length; i++) {
+      if (options[i].value === family) return options[i].description !== ""
+    }
+    return false
   }
 
   // Changing the system font restarts the shell, which tears this panel down
@@ -76,6 +95,7 @@ KeyboardPanel {
     busy = true
     terminalSetProc.command = [cli, "terminal-set", family]
     terminalSetProc.running = true
+    if (needsInstall(terminalOptions, family)) close()
   }
 
   contentWidth: fittedContentWidth(Style.space(340))
@@ -152,18 +172,18 @@ KeyboardPanel {
   }
 
   property Process systemListProc: Process {
-    command: [root.cli, "system-list"]
+    command: [root.cli, "system-options"]
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: root.systemOptions = root.splitLines(text)
+      onStreamFinished: root.systemOptions = root.parseOptions(text)
     }
   }
 
   property Process terminalListProc: Process {
-    command: [root.cli, "terminal-list"]
+    command: [root.cli, "terminal-options"]
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: root.terminalOptions = root.splitLines(text)
+      onStreamFinished: root.terminalOptions = root.parseOptions(text)
     }
   }
 

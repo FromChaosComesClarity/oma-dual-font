@@ -28,11 +28,11 @@ Oma Dual Font - separate system and terminal fonts on Omarchy.
 Usage: oma-dual-font <command> [argument]
 
   system-current           Family the system font resolves to
-  system-list              Families offered for the system font
+  system-list              Installed families for the system font\n  system-options           Picker rows, including fonts Omarchy can install
   system-set <family>      Set the system font (delegates to omarchy-font-set)
 
   terminal-current         Family the terminal is using
-  terminal-list            Monospace families offered for the terminal
+  terminal-list            Installed monospace families\n  terminal-options         Picker rows, including fonts Omarchy can install
   terminal-set <family>    Set the terminal font, system font untouched
   terminal-clear           Forget the pin; terminals follow the system font
 
@@ -70,6 +70,58 @@ terminal_list() (
   set +o pipefail
   fc-list :spacing=100 -f '%{family[0]}\n' | drop_noise | sort -u
 )
+
+# The fonts Omarchy offers under Install > Style > Font. They are not on the
+# system until someone asks for them, but they belong in the pickers: leaving
+# them out means the plugin shows fewer fonts than the stock menu offers.
+# Fields are family|package|the name Omarchy calls it.
+omarchy_font_catalog() {
+  cat <<'CATALOG'
+CaskaydiaMono Nerd Font|ttf-cascadia-mono-nerd|Cascadia Mono
+MesloLGL Nerd Font|ttf-meslo-nerd|Meslo LG Mono
+FiraCode Nerd Font|ttf-firacode-nerd|Fira Code
+VictorMono Nerd Font|ttf-victor-mono-nerd|Victor Code
+BitstromWera Nerd Font|ttf-bitstream-vera-mono-nerd|Bitstream Vera Code
+Iosevka Nerd Font Mono|ttf-iosevka-nerd|Iosevka
+CATALOG
+}
+
+# The package that would provide $1, or nothing when it is not a catalogue font.
+catalog_package() {
+  local family package label
+  while IFS='|' read -r family package label; do
+    [[ $family == "$1" ]] && { printf '%s\n' "$package"; return 0; }
+  done < <(omarchy_font_catalog)
+  return 0
+}
+
+# Rows for a picker, as value<TAB>label<TAB>description. Installed families
+# come first and carry no description; the catalogue fonts that are missing
+# follow, flagged so nobody is surprised by a download.
+build_options() {
+  local -a installed
+  mapfile -t installed < <("$@")
+
+  local family
+  for family in "${installed[@]}"; do
+    printf '%s\t%s\t\n' "$family" "$family"
+  done
+
+  local package label
+  while IFS='|' read -r family package label; do
+    font_installed "$family" && continue
+    printf '%s\t%s\tNot installed. Picking this installs %s\n' "$family" "$family" "$package"
+  done < <(omarchy_font_catalog)
+}
+
+# A catalogue font that is missing is installed the way Omarchy installs one:
+# a floating terminal so the password prompt and pacman output are visible.
+# The command re-enters this script once the package lands.
+install_then() {
+  local package="$1" verb="$2" family="$3"
+  exec omarchy-launch-floating-terminal-with-presentation \
+    "omarchy-pkg-add $(printf '%q' "$package") && $(printf '%q' "$self") $verb $(printf '%q' "$family")"
+}
 
 system_current() {
   # fontconfig is the source of truth, and fc-match returns a comma-separated
@@ -163,9 +215,15 @@ case "${1:-}" in
   system-list)     system_list ;;
   terminal-current) terminal_current ;;
   terminal-list)   terminal_list ;;
+  system-options)   build_options system_list ;;
+  terminal-options) build_options terminal_list ;;
 
   system-set)
     [[ $# -ge 2 ]] || { echo "usage: oma-dual-font system-set <family>" >&2; exit 1; }
+    if ! font_installed "$2"; then
+      pkg=$(catalog_package "$2")
+      [[ -n $pkg ]] && install_then "$pkg" system-set "$2"
+    fi
     # Stock command, unchanged: it owns the fontconfig alias and restarts the
     # shell, and its font-set hook is what replays the terminal pin afterwards.
     exec omarchy-font-set "$2"
@@ -174,6 +232,8 @@ case "${1:-}" in
   terminal-set)
     [[ $# -ge 2 ]] || { echo "usage: oma-dual-font terminal-set <family>" >&2; exit 1; }
     if ! font_installed "$2"; then
+      pkg=$(catalog_package "$2")
+      [[ -n $pkg ]] && install_then "$pkg" terminal-set "$2"
       echo "Font '$2' not found. Try: oma-dual-font terminal-list" >&2
       exit 1
     fi

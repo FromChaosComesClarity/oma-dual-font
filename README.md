@@ -36,6 +36,12 @@ exactly as shipped. The hook installs itself the first time the widget loads.
 The terminal list is monospace only, on purpose. I already know how that story
 ends.
 
+Both pickers also carry the six fonts Omarchy offers under Install > Style >
+Font, even when they are not on the machine yet. They are marked as such, and
+picking one opens the same floating terminal Omarchy uses to install a font,
+then applies it. Showing fewer fonts than the stock menu offers felt like the
+wrong kind of surprise.
+
 ## Install
 
 ```bash
@@ -62,6 +68,7 @@ The widget is a view over a CLI that works on its own:
 
 ```bash
 bin/oma-dual-font doctor            # what is installed and what is set
+bin/oma-dual-font terminal-options  # picker rows, installable fonts included
 bin/oma-dual-font system-set Poppins
 bin/oma-dual-font terminal-set 'iA Writer Mono S'
 bin/oma-dual-font terminal-clear    # terminals follow the system font again
