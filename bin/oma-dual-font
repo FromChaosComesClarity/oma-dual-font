@@ -1,0 +1,217 @@
+#!/bin/bash
+
+# Oma Dual Font: one font for the system, a different one for the terminal.
+#
+# Stock Omarchy keeps a single font. `omarchy-font-set` points the fontconfig
+# `monospace` alias at a family *and* rewrites every terminal config to match,
+# so the bar, Qt apps and the terminals always move together. Pick a
+# proportional family for the desktop and it lands in the terminal too, where
+# it is unreadable.
+#
+# The split works because every terminal names its font family explicitly in
+# its own config and so ignores the fontconfig alias. `terminal-set` writes
+# only those configs and records the choice; the font-set hook replays it
+# after any system font change. With nothing pinned every command here is a
+# no-op and Omarchy behaves exactly as shipped.
+
+set -euo pipefail
+
+state_file="${OMA_DUAL_FONT_STATE:-$HOME/.config/omarchy/terminal-font}"
+hook_dir="$HOME/.config/omarchy/hooks/font-set.d"
+hook_file="$hook_dir/10-oma-dual-font"
+self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+
+usage() {
+  cat <<USAGE
+Oma Dual Font - separate system and terminal fonts on Omarchy.
+
+Usage: oma-dual-font <command> [argument]
+
+  system-current           Family the system font resolves to
+  system-list              Families offered for the system font
+  system-set <family>      Set the system font (delegates to omarchy-font-set)
+
+  terminal-current         Family the terminal is using
+  terminal-list            Monospace families offered for the terminal
+  terminal-set <family>    Set the terminal font, system font untouched
+  terminal-clear           Forget the pin; terminals follow the system font
+
+  replay-terminal          Re-apply the pin (what the font-set hook calls)
+  install-hook             Install the font-set hook that protects the pin
+  doctor                   Report what is installed and what is set
+USAGE
+}
+
+# True when the argument names an installed font family.
+#
+# Exact, case-insensitive match against every family fontconfig knows, alias
+# names included. It runs in a subshell with pipefail off on purpose: `grep -q`
+# stops at the first match and closes the pipe, and the SIGPIPE that hands
+# fc-list would otherwise fail the check on a font that is plainly installed.
+font_installed() (
+  set +o pipefail
+  fc-list -f '%{family}\n' | tr ',' '\n' | grep -Fqix -- "$1"
+)
+
+# Drop the families nobody wants to read text in. Mirrors the filter
+# omarchy-font-list applies.
+drop_noise() {
+  grep -v -i -E 'emoji|signwriting|omarchy|nerd font (mono|propo)'
+}
+
+system_list() (
+  set +o pipefail
+  fc-list -f '%{family[0]}\n' | drop_noise | sort -u
+)
+
+# Monospace only. A proportional family in the terminal is the whole problem
+# this plugin exists to avoid, so it is never offered here.
+terminal_list() (
+  set +o pipefail
+  fc-list :spacing=100 -f '%{family[0]}\n' | drop_noise | sort -u
+)
+
+system_current() {
+  # fontconfig is the source of truth, and fc-match returns a comma-separated
+  # alias list, so take the first entry.
+  fc-match monospace -f '%{family}\n' | head -n1 | cut -d, -f1
+}
+
+terminal_current() {
+  if [[ -s $state_file ]]; then
+    head -n1 "$state_file"
+  else
+    system_current
+  fi
+}
+
+# Replace the family in each terminal's own config.
+apply_terminal_font() {
+  local font_name="$1" escaped size
+  local -a sizes
+
+  if [[ -f $HOME/.config/alacritty/alacritty.toml ]]; then
+    sed -i "s/family = \".*\"/family = \"$font_name\"/g" "$HOME/.config/alacritty/alacritty.toml"
+  fi
+
+  if [[ -f $HOME/.config/kitty/kitty.conf ]]; then
+    if grep -qE '^[[:space:]]*font_family[[:space:]]+' "$HOME/.config/kitty/kitty.conf" 2>/dev/null; then
+      escaped=$(printf '%s' "$font_name" | sed 's/[\\&/]/\\&/g')
+      sed --follow-symlinks -i -E "s/^[[:space:]]*font_family[[:space:]]+.*/font_family $escaped/" "$HOME/.config/kitty/kitty.conf"
+    else
+      printf '\nfont_family %s\n' "$font_name" >>"$HOME/.config/kitty/kitty.conf"
+    fi
+    pkill -USR1 kitty || true
+  fi
+
+  if [[ -f $HOME/.config/ghostty/config ]]; then
+    sed -i "s/font-family = \".*\"/font-family = \"$font_name\"/g" "$HOME/.config/ghostty/config"
+    pkill -SIGUSR2 ghostty || true
+  fi
+
+  # foot keeps size on the same line as the family, so carry the existing one
+  # over rather than resetting it the way omarchy-font-set does.
+  if [[ -f $HOME/.config/foot/foot.ini ]]; then
+    mapfile -t sizes < <(sed -n 's/^font=.*:size=\([0-9.]\+\).*/\1/p' "$HOME/.config/foot/foot.ini")
+    size="${sizes[0]:-9}"
+    escaped=$(printf '%s' "$font_name" | sed 's/[\\&/]/\\&/g')
+    sed -i "s/^font=.*/font=$escaped:size=$size/" "$HOME/.config/foot/foot.ini"
+  fi
+}
+
+notify_unreloadable() {
+  command -v omarchy-notification-send >/dev/null 2>&1 || return 0
+  if pgrep -x ghostty >/dev/null; then
+    omarchy-notification-send -g "Restart Ghostty to see the terminal font change"
+  fi
+  if pgrep -x foot >/dev/null; then
+    omarchy-notification-send -g "Restart Foot to see the terminal font change"
+  fi
+}
+
+install_hook() {
+  mkdir -p "$hook_dir"
+
+  local desired
+  desired=$(cat <<HOOK
+#!/bin/bash
+
+# Installed by Oma Dual Font. omarchy-font-set has just repointed every
+# terminal config at the new system font; put the pinned terminal font back so
+# the two stay independent. No pin means this exits without touching anything.
+
+set -euo pipefail
+exec $(printf '%q' "$self") replay-terminal
+HOOK
+)
+
+  # Only write when the content differs, so an unchanged hook keeps its mtime.
+  if [[ ! -f $hook_file ]] || [[ "$(cat "$hook_file")" != "$desired" ]]; then
+    printf '%s\n' "$desired" >"$hook_file"
+    chmod +x "$hook_file"
+  fi
+
+  # An earlier hand-rolled version of this hook did the same job. Two hooks
+  # applying the same pin is harmless but confusing, so retire it.
+  rm -f "$hook_dir/10-terminal-font"
+}
+
+case "${1:-}" in
+  -h|--help|help|"") usage; [[ -n ${1:-} ]] && exit 0 || exit 1 ;;
+
+  system-current)  system_current ;;
+  system-list)     system_list ;;
+  terminal-current) terminal_current ;;
+  terminal-list)   terminal_list ;;
+
+  system-set)
+    [[ $# -ge 2 ]] || { echo "usage: oma-dual-font system-set <family>" >&2; exit 1; }
+    # Stock command, unchanged: it owns the fontconfig alias and restarts the
+    # shell, and its font-set hook is what replays the terminal pin afterwards.
+    exec omarchy-font-set "$2"
+    ;;
+
+  terminal-set)
+    [[ $# -ge 2 ]] || { echo "usage: oma-dual-font terminal-set <family>" >&2; exit 1; }
+    if ! font_installed "$2"; then
+      echo "Font '$2' not found. Try: oma-dual-font terminal-list" >&2
+      exit 1
+    fi
+    apply_terminal_font "$2"
+    mkdir -p "$(dirname "$state_file")"
+    printf '%s\n' "$2" >"$state_file"
+    notify_unreloadable
+    ;;
+
+  terminal-clear)
+    rm -f "$state_file"
+    apply_terminal_font "$(system_current)"
+    echo "Terminal font cleared; following the system font ($(system_current))."
+    ;;
+
+  replay-terminal)
+    [[ -s $state_file ]] || exit 0
+    pinned=$(head -n1 "$state_file")
+    [[ -n $pinned ]] || exit 0
+    apply_terminal_font "$pinned"
+    ;;
+
+  install-hook)
+    install_hook
+    echo "Hook installed: $hook_file"
+    ;;
+
+  doctor)
+    echo "system font   : $(system_current)"
+    echo "terminal font : $(terminal_current)"
+    echo "pinned        : $([[ -s $state_file ]] && cat "$state_file" || echo '(none, following system)')"
+    echo "hook          : $([[ -x $hook_file ]] && echo "$hook_file" || echo 'NOT INSTALLED - run: oma-dual-font install-hook')"
+    echo "families      : $(system_list | wc -l) system, $(terminal_list | wc -l) monospace"
+    ;;
+
+  *)
+    echo "Unknown command: $1" >&2
+    usage >&2
+    exit 1
+    ;;
+esac
