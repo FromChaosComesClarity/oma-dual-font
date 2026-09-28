@@ -76,7 +76,9 @@ bin/oma-dual-font install-hook      # if you ever need to put the hook back
 ```
 
 Ghostty and foot cannot reload a font in place, so you get a notification
-asking you to restart them. Alacritty and kitty pick it up immediately.
+asking you to restart them. foot's SIGUSR1 and SIGUSR2 switch colour theme
+rather than reloading config, so there is no signal to send it. Alacritty and
+kitty pick the change up immediately.
 
 ## Uninstall
 
@@ -97,11 +99,30 @@ Worth being explicit, since this writes outside its own directory:
   family line, and only when you pick a terminal font.
 - `~/.config/omarchy/terminal-font`, which is just the family name it remembers.
 - `~/.config/omarchy/hooks/font-set.d/10-oma-dual-font`, installed the first
-  time the widget loads. It is the only file created outside the plugin
-  directory, the name is plugin-specific so it cannot collide with anyone
-  else's hook, and it is rewritten only when its contents would change.
+  time the widget loads. The name is plugin-specific so it cannot collide with
+  anyone else's hook, and it is rewritten only when its contents would change.
+- A marked block in `~/.config/fontconfig/fonts.conf`, between
+  `<!-- oma-dual-font:begin -->` and `<!-- oma-dual-font:end -->`. Nothing
+  outside those markers is touched, and `terminal-clear` removes the block.
+  See below for why it has to be there.
 
 The system font is never written directly. That is handed to `omarchy-font-set`.
+
+### Why it touches fontconfig
+
+`omarchy-font-set` writes a rule that prepends the system font to any pattern
+mentioning `monospace`, with a strong binding. fontconfig tags every monospace
+face with the generic `monospace` family, so that rule also catches a request
+for a *named* monospace font. With a proportional system font set,
+`fc-match "iA Writer Mono S"` answers Poppins.
+
+Terminals that match families themselves, like kitty, never notice. Ones that
+hand the name to fontconfig, like foot, get the system font instead of the
+pinned one, which looks exactly like this plugin not working.
+
+So the block puts the pinned family back in front when it was explicitly asked
+for. A bare `monospace` request is untouched and still resolves to the system
+font, which is what the bar and Qt apps ask for.
 
 Nothing else is modified, and `terminal-clear` plus deleting that hook puts you
 back to stock.

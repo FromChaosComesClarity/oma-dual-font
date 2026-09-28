@@ -171,13 +171,81 @@ apply_terminal_font() {
   fi
 }
 
+# Keeping the pinned family out of the system font's way.
+#
+# omarchy-font-set writes a fontconfig rule that prepends the system font to
+# any pattern mentioning `monospace`, with a strong binding. fontconfig tags
+# every monospace face with the generic `monospace` family, so that rule
+# catches a request for a *named* monospace font too: with a proportional
+# system font set, `fc-match "iA Writer Mono S"` answers Poppins.
+#
+# Terminals that do their own family matching (kitty) never notice. Ones that
+# hand the name to fontconfig (foot) get the system font instead of the pinned
+# one, which looks exactly like this plugin not working.
+#
+# So put the pinned family back in front whenever it was explicitly asked for.
+# A bare `monospace` request is untouched and still resolves to the system
+# font, which is what the bar and Qt apps ask for.
+#
+# omarchy-font-set rewrites this file wholesale on every system font change,
+# taking the block with it; the font-set hook puts it back.
+fontconfig_file="$HOME/.config/fontconfig/fonts.conf"
+guard_begin="  <!-- oma-dual-font:begin -->"
+guard_end="  <!-- oma-dual-font:end -->"
+
+xml_escape() {
+  printf '%s' "$1" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g'
+}
+
+strip_fontconfig_guard() {
+  [[ -f $fontconfig_file ]] || return 0
+  sed -i '/<!-- oma-dual-font:begin -->/,/<!-- oma-dual-font:end -->/d' "$fontconfig_file"
+}
+
+apply_fontconfig_guard() {
+  local family escaped block
+  family="$1"
+
+  mkdir -p "$(dirname "$fontconfig_file")"
+  if [[ ! -f $fontconfig_file ]]; then
+    cat >"$fontconfig_file" <<'SKELETON'
+<?xml version="1.0"?>
+<!DOCTYPE fontconfig SYSTEM "fonts.dtd">
+<fontconfig>
+</fontconfig>
+SKELETON
+  fi
+
+  strip_fontconfig_guard
+
+  escaped=$(xml_escape "$family")
+  block="$guard_begin
+  <match target=\"pattern\">
+    <test name=\"family\" qual=\"any\"><string>$escaped</string></test>
+    <edit name=\"family\" mode=\"prepend_first\" binding=\"strong\"><string>$escaped</string></edit>
+  </match>
+$guard_end"
+
+  if grep -q '</fontconfig>' "$fontconfig_file"; then
+    awk -v block="$block" '
+      /<\/fontconfig>/ && !inserted { print block; inserted = 1 }
+      { print }
+    ' "$fontconfig_file" >"$fontconfig_file.omadual" && mv "$fontconfig_file.omadual" "$fontconfig_file"
+  else
+    printf '%s\n' "$block" >>"$fontconfig_file"
+  fi
+}
+
 notify_unreloadable() {
   command -v omarchy-notification-send >/dev/null 2>&1 || return 0
+  # Neither reloads a font in place: foot's SIGUSR1/SIGUSR2 switch colour
+  # theme, not config, and ghostty needs a fresh surface. `-g` takes a glyph,
+  # so the message goes in the headline and description.
   if pgrep -x ghostty >/dev/null; then
-    omarchy-notification-send -g "Restart Ghostty to see the terminal font change"
+    omarchy-notification-send "Terminal font changed" "Restart Ghostty to see it"
   fi
   if pgrep -x foot >/dev/null; then
-    omarchy-notification-send -g "Restart Foot to see the terminal font change"
+    omarchy-notification-send "Terminal font changed" "Restart Foot to see it"
   fi
 }
 
@@ -236,6 +304,7 @@ case "${1:-}" in
       exit 1
     fi
     apply_terminal_font "$2"
+    apply_fontconfig_guard "$2"
     mkdir -p "$(dirname "$state_file")"
     printf '%s\n' "$2" >"$state_file"
     notify_unreloadable
@@ -243,6 +312,7 @@ case "${1:-}" in
 
   terminal-clear)
     rm -f "$state_file"
+    strip_fontconfig_guard
     apply_terminal_font "$(system_current)"
     echo "Terminal font cleared; following the system font ($(system_current))."
     ;;
@@ -252,6 +322,7 @@ case "${1:-}" in
     pinned=$(head -n1 "$state_file")
     [[ -n $pinned ]] || exit 0
     apply_terminal_font "$pinned"
+    apply_fontconfig_guard "$pinned"
     ;;
 
   install-hook)
